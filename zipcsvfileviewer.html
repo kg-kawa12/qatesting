@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ZIP展開・CSV確認ツール</title>
+  <!-- ブラウザ上でZIPを解凍するライブラリ（JSZip） -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 960px;
+      margin: 24px auto;
+      padding: 0 16px;
+      color: #333;
+    }
+    .upload-box {
+      border: 2px dashed #888;
+      padding: 20px;
+      border-radius: 6px;
+      background: #fafafa;
+      margin-bottom: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    th {
+      background-color: #f0f0f0;
+    }
+    .btn {
+      display: inline-block;
+      padding: 6px 12px;
+      margin-right: 6px;
+      background-color: #0066cc;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn-sub {
+      background-color: #2e7d32;
+    }
+    .preview-area {
+      background: #f4f4f4;
+      border: 1px solid #ddd;
+      padding: 16px;
+      max-height: 500px;
+      overflow: auto;
+    }
+    .preview-area table {
+      background: #fff;
+      margin-bottom: 0;
+    }
+    .error-text {
+      color: #d32f2f;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>ZIPファイル展開・確認ツール</h2>
+
+  <div class="upload-box">
+    <label for="zip-input"><strong>ZIPファイルを選択：</strong></label>
+    <input type="file" id="zip-input" accept=".zip" />
+  </div>
+
+  <!-- ファイル一覧テーブル -->
+  <h3>展開されたファイル一覧（<span id="file-count">0</span>件）</h3>
+  <table id="file-table">
+    <thead>
+      <tr>
+        <th>ファイル名</th>
+        <th>サイズ</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="file-list">
+      <tr>
+        <td colspan="3">ZIPファイルを選択すると一覧が表示されます</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- テキスト・CSVプレビュー領域 -->
+  <h3>ファイル内容プレビュー：<span id="preview-filename">未選択</span></h3>
+  <div id="preview-content" class="preview-area">ここにCSVの中身が表示されます</div>
+
+  <script>
+    const zipInput = document.getElementById('zip-input');
+    const fileListEl = document.getElementById('file-list');
+    const fileCountEl = document.getElementById('file-count');
+    const previewFilenameEl = document.getElementById('preview-filename');
+    const previewContentEl = document.getElementById('preview-content');
+
+    // バイト配列からUTF-8 / Shift-JISを自動判定してデコードする関数
+    function decodeText(uint8Array) {
+      try {
+        const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+        return utf8Decoder.decode(uint8Array);
+      } catch (e) {
+        const sjisDecoder = new TextDecoder('shift-jis');
+        return sjisDecoder.decode(uint8Array);
+      }
+    }
+
+    // CSV文字列を配列に変換する関数
+    function parseCSV(text) {
+      const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\r|\n/);
+      const result = [];
+      for (const line of lines) {
+        if (line.trim() === '') continue;
+        const cells = [];
+        let cur = '';
+        let inQuote = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQuote && line[i + 1] === '"') {
+              cur += '"';
+              i++;
+            } else {
+              inQuote = !inQuote;
+            }
+          } else if (ch === ',' && !inQuote) {
+            cells.push(cur);
+            cur = '';
+          } else {
+            cur += ch;
+          }
+        }
+        cells.push(cur);
+        result.push(cells);
+      }
+      return result;
+    }
+
+    // プレビューを表示する関数（CSVなら表、それ以外はメッセージ）
+    function showPreview(filename, uint8Data) {
+      previewFilenameEl.textContent = filename;
+      previewContentEl.innerHTML = '';
+
+      if (!filename.toLowerCase().endsWith('.csv')) {
+        const span = document.createElement('span');
+        span.className = 'error-text';
+        span.textContent = 'CSV以外のファイルは開けません';
+        previewContentEl.appendChild(span);
+        return;
+      }
+
+      const text = decodeText(uint8Data);
+      const rows = parseCSV(text);
+
+      if (rows.length === 0) {
+        previewContentEl.textContent = 'CSVの中身が空です';
+        return;
+      }
+
+      const table = document.createElement('table');
+      table.id = 'csv-table';
+
+      // 1行目（ヘッダー）
+      const thead = document.createElement('thead');
+      const trHead = document.createElement('tr');
+      rows[0].forEach((val, cIdx) => {
+        const th = document.createElement('th');
+        th.textContent = val;
+        th.id = `csv-header-${cIdx}`;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+      table.appendChild(thead);
+
+      // 2行目以降（データ）
+      const tbody = document.createElement('tbody');
+      for (let rIdx = 1; rIdx < rows.length; rIdx++) {
+        const tr = document.createElement('tr');
+        tr.id = `csv-row-${rIdx}`;
+        rows[rIdx].forEach((val, cIdx) => {
+          const td = document.createElement('td');
+          td.textContent = val;
+          td.id = `csv-cell-${rIdx}-${cIdx}`;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      previewContentEl.appendChild(table);
+    }
+
+    // Mac特有の不要ファイル（__MACOSX や ._ で始まる隠しファイル）を判定する関数
+    function isSystemJunkFile(entryName) {
+      const baseName = entryName.split('/').pop();
+      return (
+        entryName.startsWith('__MACOSX/') ||
+        baseName.startsWith('._') ||
+        baseName === '.DS_Store'
+      );
+    }
+
+    zipInput.addEventListener('click', () => {
+      zipInput.value = '';
+    });
+
+    zipInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      fileListEl.innerHTML = '<tr><td colspan="3">読み込み中...</td></tr>';
+      previewFilenameEl.textContent = '未選択';
+      previewContentEl.textContent = '';
+
+      try {
+        const zip = await JSZip.loadAsync(file);
+        // フォルダとMac特有の隠しファイルを除外
+        const entries = Object.values(zip.files).filter(
+          entry => !entry.dir && !isSystemJunkFile(entry.name)
+        );
+
+        fileCountEl.textContent = entries.length;
+        fileListEl.innerHTML = '';
+
+        if (entries.length === 0) {
+          fileListEl.innerHTML = '<tr><td colspan="3">ZIP内にファイルが見つかりませんでした</td></tr>';
+          return;
+        }
+
+        let autoPreviewDone = false;
+
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i];
+          const uint8Data = await entry.async('uint8array');
+          const blob = new Blob([uint8Data]);
+          const downloadUrl = URL.createObjectURL(blob);
+
+          const tr = document.createElement('tr');
+
+          const tdName = document.createElement('td');
+          tdName.textContent = entry.name;
+          tdName.id = `file-name-${i}`;
+
+          const tdSize = document.createElement('td');
+          tdSize.textContent = `${uint8Data.byteLength.toLocaleString()} bytes`;
+
+          const tdAction = document.createElement('td');
+
+          const dlLink = document.createElement('a');
+          dlLink.href = downloadUrl;
+          dlLink.download = entry.name.split('/').pop();
+          dlLink.textContent = 'ダウンロード';
+          dlLink.className = 'btn';
+          dlLink.id = `download-btn-${i}`;
+
+          const viewBtn = document.createElement('button');
+          viewBtn.type = 'button';
+          viewBtn.textContent = '中身を表示';
+          viewBtn.className = 'btn btn-sub';
+          viewBtn.id = `preview-btn-${i}`;
+          viewBtn.addEventListener('click', () => {
+            showPreview(entry.name, uint8Data);
+          });
+
+          tdAction.appendChild(dlLink);
+          tdAction.appendChild(viewBtn);
+
+          tr.appendChild(tdName);
+          tr.appendChild(tdSize);
+          tr.appendChild(tdAction);
+          fileListEl.appendChild(tr);
+
+          if (!autoPreviewDone && (entry.name.toLowerCase().endsWith('.csv') || i === entries.length - 1)) {
+            showPreview(entry.name, uint8Data);
+            autoPreviewDone = true;
+          }
+        }
+      } catch (err) {
+        fileListEl.innerHTML = `<tr><td colspan="3" style="color:red;">ZIPの読み込みに失敗しました: ${err.message}</td></tr>`;
+      }
+    });
+  </script>
+</body>
+</html>

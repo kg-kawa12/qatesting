@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>CSVファイル確認ツール</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 960px;
+      margin: 24px auto;
+      padding: 0 16px;
+      color: #333;
+    }
+    .upload-box {
+      border: 2px dashed #888;
+      padding: 20px;
+      border-radius: 6px;
+      background: #fafafa;
+      margin-bottom: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    th {
+      background-color: #f0f0f0;
+      white-space: nowrap;
+    }
+    .preview-area {
+      background: #f4f4f4;
+      border: 1px solid #ddd;
+      padding: 16px;
+      max-height: 600px;
+      overflow: auto;
+    }
+    .preview-area table {
+      background: #fff;
+      margin-bottom: 0;
+      font-size: 13px;
+    }
+    .error-text {
+      color: #d32f2f;
+      font-weight: bold;
+    }
+    .meta-info {
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>CSVファイル確認ツール</h2>
+
+  <div class="upload-box">
+    <label for="csv-input"><strong>CSVファイルを選択：</strong></label>
+    <input type="file" id="csv-input" accept=".csv" />
+  </div>
+
+  <!-- CSVプレビュー領域 -->
+  <h3>
+    CSV内容プレビュー：<span id="preview-filename">未選択</span>
+    （データ行数：<span id="row-count">0</span>件）
+  </h3>
+  <div id="preview-content" class="preview-area">ここにCSVの中身が表形式で表示されます</div>
+
+  <script>
+    const csvInput = document.getElementById('csv-input');
+    const previewFilenameEl = document.getElementById('preview-filename');
+    const rowCountEl = document.getElementById('row-count');
+    const previewContentEl = document.getElementById('preview-content');
+
+    // バイト配列からUTF-8 / Shift-JISを自動判定してデコードする関数
+    function decodeText(uint8Array) {
+      try {
+        const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+        return utf8Decoder.decode(uint8Array);
+      } catch (e) {
+        const sjisDecoder = new TextDecoder('shift-jis');
+        return sjisDecoder.decode(uint8Array);
+      }
+    }
+
+    // CSV文字列を2次元配列に変換する関数（ダブルクォート内のカンマ・改行対応）
+    function parseCSV(text) {
+      const cleanText = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const result = [];
+      let row = [];
+      let cur = '';
+      let inQuote = false;
+
+      for (let i = 0; i < cleanText.length; i++) {
+        const ch = cleanText[i];
+        const next = cleanText[i + 1];
+
+        if (inQuote) {
+          if (ch === '"' && next === '"') {
+            cur += '"';
+            i++;
+          } else if (ch === '"') {
+            inQuote = false;
+          } else {
+            cur += ch;
+          }
+        } else {
+          if (ch === '"') {
+            inQuote = true;
+          } else if (ch === ',') {
+            row.push(cur);
+            cur = '';
+          } else if (ch === '\n') {
+            row.push(cur);
+            result.push(row);
+            row = [];
+            cur = '';
+          } else {
+            cur += ch;
+          }
+        }
+      }
+
+      if (cur !== '' || row.length > 0) {
+        row.push(cur);
+        result.push(row);
+      }
+      return result.filter(r => !(r.length === 1 && r[0] === ''));
+    }
+
+    // 表を描画する関数
+    function renderCSVTable(filename, uint8Data) {
+      previewFilenameEl.textContent = filename;
+      previewContentEl.innerHTML = '';
+      rowCountEl.textContent = '0';
+
+      if (!filename.toLowerCase().endsWith('.csv')) {
+        const span = document.createElement('span');
+        span.className = 'error-text';
+        span.textContent = 'CSV以外のファイルは開けません';
+        previewContentEl.appendChild(span);
+        return;
+      }
+
+      const text = decodeText(uint8Data);
+      const rows = parseCSV(text);
+
+      if (rows.length === 0) {
+        previewContentEl.textContent = 'CSVの中身が空です';
+        return;
+      }
+
+      // ヘッダー行を除いたデータ件数を表示
+      rowCountEl.textContent = Math.max(0, rows.length - 1);
+
+      const table = document.createElement('table');
+      table.id = 'csv-table';
+
+      // 1行目（ヘッダー）
+      const thead = document.createElement('thead');
+      const trHead = document.createElement('tr');
+      rows[0].forEach((val, cIdx) => {
+        const th = document.createElement('th');
+        th.textContent = val;
+        th.id = `csv-header-${cIdx}`;
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+      table.appendChild(thead);
+
+      // 2行目以降（データ行）
+      const tbody = document.createElement('tbody');
+      for (let rIdx = 1; rIdx < rows.length; rIdx++) {
+        const tr = document.createElement('tr');
+        tr.id = `csv-row-${rIdx}`;
+        rows[rIdx].forEach((val, cIdx) => {
+          const td = document.createElement('td');
+          td.textContent = val;
+          td.id = `csv-cell-${rIdx}-${cIdx}`;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      previewContentEl.appendChild(table);
+    }
+
+    // 同じCSVファイルを再選択しても発火するようにリセット
+    csvInput.addEventListener('click', () => {
+      csvInput.value = '';
+    });
+
+    csvInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      previewContentEl.textContent = '読み込み中...';
+
+      try {
+        const buffer = await file.arrayBuffer();
+        const uint8Data = new Uint8Array(buffer);
+        renderCSVTable(file.name, uint8Data);
+      } catch (err) {
+        previewContentEl.innerHTML = `<span class="error-text">CSVの読み込みに失敗しました: ${err.message}</span>`;
+      }
+    });
+  </script>
+</body>
+</html>
